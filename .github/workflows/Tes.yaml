@@ -3,10 +3,6 @@ name: OEM GSI Builder1
 on:
   workflow_dispatch:
 
-defaults:
-  run:
-    shell: bash
-
 jobs:
   build:
     runs-on: ubuntu-20.04
@@ -24,6 +20,8 @@ jobs:
           echo "EXTRA_ARGS=$(cat config.env | grep EXTRA_ARGS | cut -d '=' -f2)" >> $GITHUB_ENV
           echo "TG_CHAT_IDS=$(cat config.env | grep TG_CHAT_IDS | cut -d '=' -f2)" >> $GITHUB_ENV
           echo "TG_BOT_TOKEN=$(cat config.env | grep TG_BOT_TOKEN | cut -d '=' -f2)" >> $GITHUB_ENV
+      # Tambahkan langkah-langkah lainnya di sini...
+
       - name: Check Configuration
         run: |
           function required () { if ! [[ "$1" ]]; then echo "$2 variable can't be null." && exit 1; fi }
