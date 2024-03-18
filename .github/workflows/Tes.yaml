@@ -1,0 +1,91 @@
+name: OEM GSI Builder1
+
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Load Configuration
+        id: config
+        run: |
+          echo "TOOL_REPO=$(cat config.env | grep TOOL_REPO | cut -d '=' -f2)" >> $GITHUB_ENV
+          echo "URL=$(cat config.env | grep URL | cut -d '=' -f2)" >> $GITHUB_ENV
+          echo "FIRMWARE_TYPE=$(cat config.env | grep FIRMWARE_TYPE | cut -d '=' -f2)" >> $GITHUB_ENV
+          echo "SOURCEFORGE_DIR=$(cat config.env | grep SOURCEFORGE_DIR | cut -d '=' -f2)" >> $GITHUB_ENV
+          echo "OUTPUT_TYPE=$(cat config.env | grep OUTPUT_TYPE | cut -d '=' -f2)" >> $GITHUB_ENV
+          echo "EXTRA_ARGS=$(cat config.env | grep EXTRA_ARGS | cut -d '=' -f2)" >> $GITHUB_ENV
+          echo "TG_CHAT_IDS=$(cat config.env | grep TG_CHAT_IDS | cut -d '=' -f2)" >> $GITHUB_ENV
+          echo "TG_BOT_TOKEN=$(cat config.env | grep TG_BOT_TOKEN | cut -d '=' -f2)" >> $GITHUB_ENV
+      - name: Check Configuration
+        run: |
+          function required () { if ! [[ "$1" ]]; then echo "$2 variable can't be null." && exit 1; fi }
+          required "${{ secrets.USERNAME }}" "USERNAME secret"
+          required "${{ secrets.PASSWORD }}" "PASSWORD secret"
+
+          required "${{ env.TOOL_REPO }}" "TOOL_REPO config"
+          required "${{ env.URL }}" "URL config"
+          required "${{ env.FIRMWARE_TYPE }}" "FIRMWARE_TYPE config"
+          required "${{ env.SOURCEFORGE_DIR }}" "SOURCEFORGE_DIR config"
+          required "${{ env.OUTPUT_TYPE }}" "OUTPUT_TYPE config"
+      - name: Setup ErfanGSIs Tools
+        run: |
+          git clone --recurse-submodules "${{ env.TOOL_REPO }}"
+          bash ErfanGSIs/setup.sh
+          sed -i '$d' ErfanGSIs/url2GSI.sh
+      - name: Build A/B
+        if: ${{ env.OUTPUT_TYPE == 'all' }}
+        run: |
+          sudo ./ErfanGSIs/url2GSI.sh "${{ env.URL }}" "${{ env.FIRMWARE_TYPE }}" "${{ env.EXTRA_ARGS }}"
+      - name: Build AB
+        if: ${{ env.OUTPUT_TYPE == 'ab' }}
+        run: |
+          sudo ./ErfanGSIs/url2GSI.sh "${{ env.URL }}" "${{ env.FIRMWARE_TYPE }}" --ab ${{ env.EXTRA_ARGS }}
+      - name: Build AOnly
+        if: ${{ env.OUTPUT_TYPE == 'a' }}
+        run: |
+          sudo ./ErfanGSIs/url2GSI.sh "${{ env.URL }}" "${{ env.FIRMWARE_TYPE }}" --aonly ${{ env.EXTRA_ARGS }}
+      - name: Pre-Upload
+        run: |
+          mkdir build/
+          sudo mv ErfanGSIs/output/*.img build/
+          gzip -r build/
+          sudo mv ErfanGSIs/output/*.txt build/
+      - name: Setup SSH
+        uses: fastai/workflows/ssh@master
+        with:
+          ssh_key: ${{ secrets.SSH_KEY }}
+          key_file: id_ecdsa
+      - name: Upload
+        run: |
+          ssh-keyscan frs.sourceforge.net >> ~/.ssh/known_hosts
+          sshpass -p "${{ secrets.PASSWORD }}" rsync -arsP -e ssh build/ "${{ secrets.USERNAME }}@frs.sourceforge.net:${{ env.SOURCEFORGE_DIR }}"
+      - name: Telegram Notify
+        if: ${{ env.TG_CHAT_IDS != 0 }}
+        run: |
+          BOT_TOKEN="${{ env.TG_BOT_TOKEN }}"
+          CHAT_IDS="${{ env.TG_CHAT_IDS }}"
+          TG_URL="https://api.telegram.org/bot$BOT_TOKEN/sendMessage"
+
+          chatids=("$CHAT_IDS")
+
+          for chat in "${chatids[@]}"; do
+            TYPE="${{ env.FIRMWARE_TYPE }}"
+            OUTPUT="${{ env.OUTPUT_TYPE }}"
+            BASE="${{ env.URL }}"
+            SOURCEFORGE="${{ env.SOURCEFORGE_URL }}"
+            for file in build/*.txt; do
+              filename=$(basename -- "$file")
+              sed -i "1s/^/Name: ${filename%.*}\n/" "$file"
+              printf "\n\nBase Firmware Link: $BASE" >> "$file"
+              printf "\n\nDownload Link: $SOURCEFORGE" >> "$file"
+              curl -s -d "chat_id=$chat"  --data-urlencode text@$file "$TG_URL"
+            done
+          done
